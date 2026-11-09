@@ -12,16 +12,27 @@ text**, together with the same title.
 ## Run
 
 ```bash
-cp .env.example .env          # HF_TOKEN: Hugging Face READ token (the models are private); API_TOKEN: optional, enables the token check
-docker compose up -d --build
-docker compose logs -f        # the first start downloads ~2.5 GB; /health is 200 when ready
+cp .env.example .env          # set MODELS_DIR (host folder for the models), HF_TOKEN (Hugging Face READ token, the models are private), optionally API_TOKEN
+set -a; source .env; set +a   # load .env into the shell so $MODELS_DIR and $PORT are available below
+mkdir -p "$MODELS_DIR"
+
+docker build -t captcha-solver .
+docker run -d --name captcha-solver --restart unless-stopped \
+  -p "${PORT:-8002}:8002" --env-file .env -v "$MODELS_DIR:/models" captcha-solver
+docker logs -f captcha-solver  # the first start downloads ~2.5 GB; /health is 200 when ready
 ```
 
-**The models are downloaded once.** They are stored in the named volume `captcha_solver_models`
-(`HF_HOME=/models/huggingface`), so rebuilding the image, `docker compose down` or restarting never downloads
-them again. Only `docker compose down -v` / `docker volume rm captcha_solver_models` removes them.
-To download without starting the API: `docker compose run --rm download-models`.
+**The models are downloaded once.** They are stored in `MODELS_DIR` on the host (mounted at `/models`,
+`HF_HOME=/models/huggingface`), so rebuilding the image, removing the container or restarting never downloads
+them again. Delete that folder to remove them.
+To download without starting the API:
+
+```bash
+docker run --rm --env-file .env -e WARMUP=false -v "$MODELS_DIR:/models" captcha-solver python -m app.download
+```
+
 The download resumes after a dropped connection and retries automatically.
+Stop and remove: `docker rm -f captcha-solver`.
 
 ## API
 
@@ -100,7 +111,8 @@ No token needed.
 |---|---|---|
 | `HF_TOKEN` | empty | Hugging Face read token (needed while the model repos are private) |
 | `API_TOKEN` | empty | if set, the token callers must send (wrong or missing = 403); if empty, no check |
-| `PORT` | `8002` | published port |
+| `MODELS_DIR` | none, required | host folder where the models are stored (used in the `docker run -v` above, not read by the app) |
+| `PORT` | `8002` | published host port (used in the `docker run -p` above, not read by the app) |
 | `MATH_MODEL_ID` / `DIGITS_MODEL_ID` | the two repos above | point at newer model versions |
 | `DIGIT_CONFIDENT` | `0.6` | below this the digits model also tries contrast-normalised views |
 | `MAX_IMAGE_BYTES` | `307200` | largest accepted image (300 KB) |
@@ -108,8 +120,8 @@ No token needed.
 | `DOWNLOAD_ATTEMPTS` | `15` | tries per model download (resumes each time) |
 | `HF_HUB_OFFLINE` | `0` | `1` = never contact Hugging Face once the models are in the volume |
 
-To pick up a **new version of a model** (same repo id), clear the cached files once:
-`docker compose run --rm --entrypoint sh download-models -c 'rm -rf /models/huggingface/hub/models--arkhabbazan--ocr-digits-captcha'` and restart.
+To pick up a **new version of a model** (same repo id), delete its cached folder once and restart:
+`rm -rf "$MODELS_DIR/huggingface/hub/models--arkhabbazan--ocr-digits-captcha"` (or `...ocr-math-captcha`), then `docker restart captcha-solver`.
 
 ## Develop / test
 
