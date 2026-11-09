@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+pillow>=10
+numpy>=1.26
+transformers>=4.48,<5
+huggingface_hub>=0.27,<1
+sentencepiece
+torch

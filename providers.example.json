@@ -1,0 +1,43 @@
+[
+  {
+    "name": "SITE_A",
+    "kind": "math",
+    "url": "https://captcha.site-a.example/api/Captcha/get",
+    "headers": {
+      "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "en,fa;q=0.9,en-US;q=0.8",
+      "Connection": "keep-alive",
+      "Origin": "https://site-a.example/",
+      "Referer": "https://site-a.example/"
+    },
+    "style": "token_image"
+  },
+  {
+    "name": "SITE_B",
+    "kind": "digits",
+    "url": "https://api.site-b.example/captcha",
+    "headers": {
+      "Accept": "*/*",
+      "Accept-Language": "en,fa;q=0.9,en-US;q=0.8",
+      "Connection": "keep-alive",
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "same-site",
+      "Origin": "https://site-b.example",
+      "Referer": "https://site-b.example/"
+    },
+    "style": "token_cookies",
+    "length": 4
+  },
+  {
+    "name": "SITE_C",
+    "kind": "digits",
+    "url": "https://identity.site-c.example/api/Captcha/GetCaptcha",
+    "headers": {
+      "Accept": "application/json, text/plain, */*",
+      "Referer": "https://site-c.example/"
+    },
+    "style": "hash_salt",
+    "length": 5
+  }
+]

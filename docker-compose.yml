@@ -1,0 +1,53 @@
+# Captcha solver: fetches a captcha from a provider, reads it with the OCR models, returns the token + the reading.
+#
+#   API_TOKEN in .env is optional (see .env.example): if set, callers must send it; if empty, no check.
+#   docker compose up -d --build        start (the first start downloads the models into the volume)
+#   docker compose logs -f              watch the download; /health turns 200 when ready
+#   docker compose run --rm download-models   optional: only download the models, then exit
+#
+# The models live in the named volume below, so they are downloaded once and survive rebuilds and
+# `docker compose down`. Only `docker compose down -v` (or `docker volume rm`) deletes them.
+
+services:
+  captcha-solver:
+    build: .
+    image: captcha-solver:latest
+    container_name: captcha-solver
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8002}:8002"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}              # read token; needed while a model repository is private
+      API_TOKEN: ${API_TOKEN:-}   # optional: if set callers must send it (else 403); if empty no token check
+      MATH_MODEL_ID: ${MATH_MODEL_ID:-arkhabbazan/ocr-math-captcha}
+      DIGITS_MODEL_ID: ${DIGITS_MODEL_ID:-arkhabbazan/ocr-digits-captcha}
+      PROVIDER_TIMEOUT: ${PROVIDER_TIMEOUT:-10}
+      HF_HUB_DISABLE_XET: ${HF_HUB_DISABLE_XET:-1}   # plain HTTP download; resumes better on flaky connections
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}             # 1 = never contact Hugging Face (models are already in the volume)
+    volumes:
+      - captcha_models:/models
+      - ./providers.json:/srv/providers.json:ro   # provider list, not in git (see providers.example.json)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15m                    # the very first start downloads about 2.5 GB
+
+  download-models:
+    build: .
+    image: captcha-solver:latest
+    profiles: ["tools"]
+    command: ["python", "-m", "app.download"]
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      MATH_MODEL_ID: ${MATH_MODEL_ID:-arkhabbazan/ocr-math-captcha}
+      DIGITS_MODEL_ID: ${DIGITS_MODEL_ID:-arkhabbazan/ocr-digits-captcha}
+      HF_HUB_DISABLE_XET: ${HF_HUB_DISABLE_XET:-1}
+      WARMUP: "false"
+    volumes:
+      - captcha_models:/models
+
+volumes:
+  captcha_models:
+    name: captcha_solver_models            # fixed name: the same volume is reused by every build of this project
