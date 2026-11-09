@@ -7,6 +7,7 @@ they are only downloaded the very first time.
 import io
 import logging
 import math
+import os
 import re
 import threading
 import time
@@ -14,6 +15,7 @@ import time
 import numpy as np
 import torch
 from PIL import Image, ImageOps
+from huggingface_hub import HfApi, constants as hub_constants, snapshot_download
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
 from app import config
@@ -26,6 +28,66 @@ FULL_MATH = re.compile(r"^(\d+)([+-])(\d+)=\?$")
 
 class ImageError(ValueError):
     """The bytes are not a usable image."""
+
+
+def _folder_size(path):
+    """Total bytes of the files under `path` (also the .incomplete ones of a running download)."""
+    total = 0
+    for root, _, names in os.walk(path):
+        for name in names:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:   # a partial file was just renamed
+                pass
+    return total
+
+
+class _ProgressLogger(threading.Thread):
+    """While a model downloads, log its progress every 10 % by watching the blob folder of the Hub cache grow."""
+
+    def __init__(self, model_id, total, interval=2.0):
+        super().__init__(daemon=True, name="download-progress")
+        self.model_id, self.total, self.interval = model_id, total, interval
+        self.blobs = os.path.join(hub_constants.HF_HUB_CACHE, "models--" + model_id.replace("/", "--"), "blobs")
+        self.start_bytes = self._size()
+        self.logged = self._step(self.start_bytes)     # a resumed download only reports the steps still to come
+        self.downloading = self.start_bytes < total
+        self._stopped = threading.Event()
+
+    def _size(self):
+        return _folder_size(self.blobs) if os.path.isdir(self.blobs) else 0
+
+    def _step(self, size):
+        return min(100, size * 100 // self.total) // 10 * 10
+
+    def report(self, final=False):
+        size = self._size()
+        step = 100 if final else self._step(size)
+        if step > self.logged:
+            self.logged = step
+            logger.info("Downloading %s: %d%% (%.0f of %.0f MB)", self.model_id, step, min(size, self.total) / 1e6, self.total / 1e6)
+
+    def run(self):
+        while not self._stopped.wait(self.interval):
+            self.report()
+
+    def finish(self):
+        self._stopped.set()
+        if self.downloading:
+            self.report(final=True)
+
+
+def _download_plan(model_id):
+    """(file names, total bytes) of the files the model needs, or (None, 0) if the Hub cannot be asked."""
+    try:
+        siblings = HfApi().model_info(model_id, files_metadata=True, token=config.HF_TOKEN).siblings
+    except Exception:
+        return None, 0
+    sizes = {s.rfilename: s.size or 0 for s in siblings}
+    has_safetensors = any(name.endswith(".safetensors") for name in sizes)
+    unneeded = (".h5", ".msgpack", ".ot", ".onnx") + ((".bin", ".pt", ".pth") if has_safetensors else ())
+    sizes = {name: size for name, size in sizes.items() if not name.endswith(unneeded) and not name.startswith("checkpoint-")}
+    return list(sizes), sum(sizes.values())
 
 
 class OcrEngine:
@@ -51,12 +113,32 @@ class OcrEngine:
                 logger.warning("Model download failed (%s), retry %d/%d", e.__class__.__name__, attempt, config.DOWNLOAD_ATTEMPTS - 1)
                 time.sleep(5)
 
+    @staticmethod
+    def _download(model_id):
+        """Make sure the model is on disk, log the progress every 10 % and return the folder it is saved in."""
+        files, total = _download_plan(model_id)
+        progress = None
+        if total:
+            logger.info("Checking %s on the Hub: %.0f MB in %d files", model_id, total / 1e6, len(files))
+            progress = _ProgressLogger(model_id, total)
+            progress.start()
+        try:
+            path = snapshot_download(model_id, token=config.HF_TOKEN, allow_patterns=files)
+        finally:
+            if progress:
+                progress.finish()
+        outcome = "ready" if progress is None else ("downloaded" if progress.downloading else "found on disk, nothing to download")
+        logger.info("Model %s %s, saved at %s (%.0f MB)", model_id, outcome, path, _folder_size(path) / 1e6)
+        return path
+
     def load(self):
         try:
+            logger.info("Models are stored in %s", hub_constants.HF_HUB_CACHE)
             for kind, model_id in self.model_ids.items():
                 logger.info("Loading %s model %s", kind, model_id)
-                processor = self._retry(lambda: TrOCRProcessor.from_pretrained(model_id, token=config.HF_TOKEN))
-                model = self._retry(lambda: VisionEncoderDecoderModel.from_pretrained(model_id, token=config.HF_TOKEN))
+                path = self._retry(lambda: self._download(model_id))
+                processor = TrOCRProcessor.from_pretrained(path)
+                model = VisionEncoderDecoderModel.from_pretrained(path)
                 self.experts[kind] = (processor, model.to(DEVICE).eval())
             if config.WARMUP:
                 blank = Image.new("RGB", (160, 60), "white")

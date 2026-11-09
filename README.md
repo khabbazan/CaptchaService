@@ -32,6 +32,14 @@ docker run --rm --env-file .env -e WARMUP=false -v "$MODELS_DIR:/models" captcha
 ```
 
 The download resumes after a dropped connection and retries automatically.
+While it downloads, the log shows the progress every 10 % and, at the end, the folder where each model is saved:
+
+```
+Models are stored in /models/huggingface/hub
+Downloading arkhabbazan/ocr-digits-captcha: 10% (118 of 1180 MB)
+...
+Model arkhabbazan/ocr-digits-captcha downloaded, saved at /models/huggingface/hub/models--.../snapshots/<hash> (1180 MB)
+```
 Stop and remove: `docker rm -f captcha-solver`.
 
 ## API

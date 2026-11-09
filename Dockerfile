@@ -5,7 +5,9 @@ ENV PYTHONUNBUFFERED=1 \
     # Models and tokenizers live in the mounted volume, not in the image.
     HF_HOME=/models/huggingface \
     # Plain HTTP download; resumes better on flaky connections.
-    HF_HUB_DISABLE_XET=1
+    HF_HUB_DISABLE_XET=1 \
+    # The download progress is logged by the app every 10 %; no carriage-return bars in the logs.
+    HF_HUB_DISABLE_PROGRESS_BARS=1
 
 WORKDIR /srv
 
