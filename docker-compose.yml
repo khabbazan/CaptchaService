@@ -1,4 +1,4 @@
-# Captcha solver: fetches a captcha from a provider, reads it with the OCR models, returns the token + the reading.
+# Captcha solver: takes a captcha image + a title, reads it with the OCR models, returns the reading with the same title.
 #
 #   API_TOKEN in .env is optional (see .env.example): if set, callers must send it; if empty, no check.
 #   docker compose up -d --build        start (the first start downloads the models into the volume)
@@ -21,12 +21,10 @@ services:
       API_TOKEN: ${API_TOKEN:-}   # optional: if set callers must send it (else 403); if empty no token check
       MATH_MODEL_ID: ${MATH_MODEL_ID:-arkhabbazan/ocr-math-captcha}
       DIGITS_MODEL_ID: ${DIGITS_MODEL_ID:-arkhabbazan/ocr-digits-captcha}
-      PROVIDER_TIMEOUT: ${PROVIDER_TIMEOUT:-10}
       HF_HUB_DISABLE_XET: ${HF_HUB_DISABLE_XET:-1}   # plain HTTP download; resumes better on flaky connections
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}             # 1 = never contact Hugging Face (models are already in the volume)
     volumes:
       - captcha_models:/models
-      - ./providers.json:/srv/providers.json:ro   # provider list, not in git (see providers.example.json)
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=5)"]
       interval: 30s

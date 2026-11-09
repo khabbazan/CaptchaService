@@ -137,7 +137,7 @@ class OcrEngine:
             return text, confidence, tokens, 1
 
         # The fine-tuned model must be free to emit its start token, so decoding is not constrained to
-        # digit tokens; the result is validated against the provider's digit count instead.
+        # digit tokens; the result is validated against the expected digit count instead.
         min_digits, max_digits = (length, length) if length else (4, 7)
         pattern = re.compile(rf"^\d{{{min_digits},{max_digits}}}$")
         views = self._views(image)

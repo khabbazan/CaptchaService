@@ -16,12 +16,6 @@ HF_TOKEN = os.environ.get("HF_TOKEN") or False
 # `X-API-Token: <token>`); a missing or wrong token gets 403. Unset or empty = no token check at all.
 API_TOKEN = os.environ.get("API_TOKEN", "")
 
-# Provider requests.
-PROVIDER_TIMEOUT = float(os.environ.get("PROVIDER_TIMEOUT", "10"))
-
-# JSON file listing the captcha providers (see providers.example.json).
-PROVIDERS_FILE = os.environ.get("PROVIDERS_FILE", "providers.json")
-
 # OCR.
 MAX_IMAGE_BYTES = int(os.environ.get("MAX_IMAGE_BYTES", str(300 * 1024)))
 # A digits reading at or above this confidence is accepted without trying the contrast-normalised views.

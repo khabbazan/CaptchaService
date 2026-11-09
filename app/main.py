@@ -1,25 +1,21 @@
 import base64
-import io
 import binascii
 import logging
 import secrets
 import threading
 
-import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from PIL import Image
 from pydantic import BaseModel
 
 from app import config
 from app.ocr import ImageError, OcrEngine
-from app.providers import PROVIDERS, ProviderError, fetch_captcha
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 app = FastAPI(
     title="Captcha solver",
-    description="Fetches a captcha from a provider, reads it with the OCR models and returns the captcha token and the reading.",
+    description="Reads a captcha image with the OCR models and returns the reading together with the caller's title.",
 )
 engine = OcrEngine()
 
@@ -44,19 +40,6 @@ def require_ready():
         raise HTTPException(status_code=503, detail=engine.error or "Models are loading.")
 
 
-def provider_or_404(platform):
-    provider = PROVIDERS.get(platform.upper())
-    if provider is None:
-        raise HTTPException(status_code=404, detail=f"Unknown platform. Choose one of: {', '.join(PROVIDERS)}.")
-    return provider
-
-
-def data_uri(raw):
-    image_format = (Image.open(io.BytesIO(raw)).format or "PNG").lower()
-    return f"data:image/{'jpeg' if image_format == 'jpg' else image_format};base64,{base64.b64encode(raw).decode()}"
-
-
-# ---------------------------------------------------------------------------- info
 @app.get("/health")
 def health():
     body = {
@@ -69,72 +52,6 @@ def health():
     return body
 
 
-@app.get("/platforms", dependencies=[Depends(require_token)])
-def platforms():
-    return [{"platform": p.name, "kind": p.kind, "length": p.length} for p in PROVIDERS.values()]
-
-
-# ---------------------------------------------------------------------------- main endpoint
-@app.get("/captcha/{platform}", dependencies=[Depends(require_token), Depends(require_ready)])
-async def captcha(
-    platform: str,
-    image: bool = Query(True, description="Include the captcha image (data URI) in the response."),
-    min_confidence: float = Query(0.0, ge=0.0, le=1.0, description="Fetch a new captcha until the reading is at least this confident."),
-    max_attempts: int = Query(1, ge=1, le=10, description="Maximum captchas to fetch while chasing min_confidence."),
-):
-    """
-    Fetch a captcha from the provider and read it. Returns the captcha token (token, or hash and salt, plus
-    any cookies the provider set) together with every text feature of the reading.
-
-    With `max_attempts > 1` the best reading across the attempts is returned, together with the token
-    and image of that very captcha.
-    """
-    provider = provider_or_404(platform)
-    best = None
-    attempts = 0
-    async with httpx.AsyncClient() as client:
-        for _ in range(max_attempts):
-            attempts += 1
-            try:
-                fetched = await fetch_captcha(provider.name, client)
-            except ProviderError as e:
-                if best is None and attempts == max_attempts:
-                    raise HTTPException(status_code=502, detail=str(e))
-                continue
-            try:
-                reading = await run_in_threadpool(
-                    engine.solve, OcrEngine.open_image(fetched.image_bytes), provider.kind, provider.length)
-            except ImageError as e:
-                if best is None and attempts == max_attempts:
-                    raise HTTPException(status_code=502, detail=f"{provider.name} returned {e}")
-                continue
-            rank = (reading["valid_format"], reading["confidence"])
-            if best is None or rank > best[0]:
-                best = (rank, fetched, reading)
-            if reading["valid_format"] and reading["confidence"] >= min_confidence:
-                break
-    if best is None:
-        raise HTTPException(status_code=502, detail=f"{provider.name} did not return a usable captcha.")
-
-    _, fetched, reading = best
-    return {
-        "platform": provider.name,
-        "kind": provider.kind,
-        "attempts": attempts,
-        "meets_min_confidence": reading["valid_format"] and reading["confidence"] >= min_confidence,
-        "captcha": {
-            "token": fetched.token,
-            "hash": fetched.hash,
-            "salt": fetched.salt,
-            "cookies": fetched.cookies,
-            "fetch_ms": fetched.fetch_ms,
-            **({"image": data_uri(fetched.image_bytes)} if image else {}),
-        },
-        "text": reading,
-    }
-
-
-# ---------------------------------------------------------------------------- read a captcha image
 KINDS = {"math": "math", "digits": "digits", "digit": "digits"}
 
 
@@ -142,13 +59,14 @@ class SolveRequest(BaseModel):
     image: str                       # base64 or data URI
     kind: str                        # "digits" (alias "digit") or "math"
     length: int | None = None        # digits only: exact digit count, when you know it
+    title: str | None = None         # free label chosen by the caller, returned unchanged in the response
 
 
 @app.post("/solve", dependencies=[Depends(require_token), Depends(require_ready)])
 async def solve(body: SolveRequest):
     """
     Read a captcha image. Give the **kind** (`digits` or `math`) and the image; for digit captchas you may
-    also give the exact `length`. Returns the reading and every text feature of it.
+    also give the exact `length`. An optional `title` (any string) is returned unchanged with the reading.
     """
     kind = KINDS.get(body.kind.strip().lower())
     if kind is None:
@@ -160,4 +78,5 @@ async def solve(body: SolveRequest):
         image = OcrEngine.open_image(raw)
     except (binascii.Error, ImageError) as e:
         raise HTTPException(status_code=400, detail=str(e) or "Invalid image.")
-    return await run_in_threadpool(engine.solve, image, kind, body.length if kind == "digits" else None)
+    result = await run_in_threadpool(engine.solve, image, kind, body.length if kind == "digits" else None)
+    return {"title": body.title, **result}
